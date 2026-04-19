@@ -1909,9 +1909,14 @@ class Session(pg.Object, pg.views.html.HtmlTreeView.Extension):
 
   def _on_bound(self):
     super()._on_bound()
-    self._tls = threading.local()
-    self._current_action = self.root
-    self._current_execution = self.root.execution
+    # Guard against re-binding: PyGlove calls _on_bound when an object is
+    # assigned to a parent, which can happen on a different thread. Resetting
+    # _tls in that case would wipe out thread-local state for all threads that
+    # have already initialized their context.
+    if '_tls' not in self.__dict__:
+      self._tls = threading.local()
+      self._current_action = self.root
+      self._current_execution = self.root.execution
     if self.id is None:
       self.rebind(
           id=f'agent@{uuid.uuid4().hex[-7:]}',

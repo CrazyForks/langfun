@@ -14,6 +14,7 @@
 """Tests for base action."""
 
 import asyncio
+import threading
 import time
 import unittest
 
@@ -657,6 +658,38 @@ class SessionTest(unittest.TestCase):
           default=None)
     self.assertEqual(len(session.root.queries), 1)
     self.assertIsNone(session.root.queries[0].error)
+
+  def test_tls_preserved_on_rebinding_in_new_thread(self):
+    """Regression test: PyGlove re-binding must not wipe thread-local state."""
+
+    class Dummy(pg.Object):
+      session: pg.typing.Any()
+
+    class DummyAction(action_lib.Action):
+      def call(self, session, **kwargs):
+        return 'done'
+
+    session = action_lib.Session()
+    session.start()
+
+    with session.track_action(DummyAction()):
+      def worker():
+        # Assigning to a PyGlove object triggers _on_bound on a different
+        # thread, which previously reset the session's thread-local storage.
+        _ = Dummy(session=session)
+
+      t = threading.Thread(target=worker)
+      t.start()
+      t.join()
+
+      # After re-binding on another thread, the original thread's context
+      # must still be intact.
+      try:
+        _ = session.current_action
+      except AttributeError as e:
+        self.fail(f'Context lost on rebinding: {e}')
+
+    session.end(None)
 
 
 if __name__ == '__main__':
