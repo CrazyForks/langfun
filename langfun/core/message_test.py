@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for message."""
+"""Tests for message, including on_unknown_modality_marker behaviors."""
 
 import inspect
 import unittest
@@ -38,10 +38,7 @@ class MessageTest(unittest.TestCase):
     d = pg.Dict(x=A())
 
     m = message.UserMessage(
-        'hi',
-        metadata=dict(x=1), x=pg.Ref(d.x),
-        y=2,
-        tags=['lm-input']
+        'hi', metadata=dict(x=1), x=pg.Ref(d.x), y=2, tags=['lm-input']
     )
     self.assertEqual(m.metadata, {'x': pg.Ref(d.x), 'y': 2})
     self.assertEqual(m.sender, 'User')
@@ -160,14 +157,11 @@ class MessageTest(unittest.TestCase):
     m3.tag('lm-output')
 
     self.assertEqual(
-        m3.trace(), [m1, m2, m3],
+        m3.trace(),
+        [m1, m2, m3],
     )
-    self.assertEqual(
-        m3.trace('lm-input'), [m1]
-    )
-    self.assertEqual(
-        m3.trace('transformed'), [m3]
-    )
+    self.assertEqual(m3.trace('lm-input'), [m1])
+    self.assertEqual(m3.trace('transformed'), [m3])
     self.assertIs(m2.lm_input, m1)
     self.assertIs(m3.lm_input, m1)
     self.assertEqual(m3.lm_inputs, [m1])
@@ -292,7 +286,7 @@ class MessageTest(unittest.TestCase):
     self.assertEqual(str(m), m.text)
 
     m = message.MemoryRecord('hi', sender="Someone's Memory")
-    self.assertEqual(m.sender, 'Someone\'s Memory')
+    self.assertEqual(m.sender, "Someone's Memory")
     self.assertEqual(str(m), m.text)
 
   def test_get_modality(self):
@@ -359,6 +353,27 @@ class MessageTest(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, 'Unknown modality reference'):
       message.UserMessage('<<[[abc]]>>').chunk()
 
+  def test_treat_unknown_modality_marker(self):
+    with message.treat_unknown_modality_marker('raise'):
+      with self.assertRaisesRegex(ValueError, 'Unknown modality reference'):
+        message.UserMessage('<<[[abc]]>>').chunk()
+
+    with message.treat_unknown_modality_marker('drop'):
+      m = message.UserMessage('Hi <<[[abc]]>> world')
+      chunks = m.chunk()
+      self.assertEqual(chunks, ['Hi', 'world'])
+
+    with message.treat_unknown_modality_marker('keep'):
+      m = message.UserMessage('Hi <<[[abc]]>> world')
+      chunks = m.chunk()
+      self.assertEqual(chunks, ['Hi <<[[abc]]>>', 'world'])
+
+    with pg.contextual_override(
+        __unknown_modality_marker_treatment__='invalid'
+    ):
+      with self.assertRaisesRegex(ValueError, 'Invalid treatment'):
+        message.UserMessage('<<[[abc]]>>').chunk()
+
   def assert_html_content(self, html, expected):
     expected = inspect.cleandoc(expected).strip()
     actual = html.content.strip()
@@ -368,8 +383,7 @@ class MessageTest(unittest.TestCase):
 
   def test_html_style(self):
     self.assertIn(
-        inspect.cleandoc(
-            """
+        inspect.cleandoc("""
             /* Langfun Message styles.*/
             [class^="message-"] > details {
                 margin: 0px 0px 5px 0px;
@@ -427,19 +441,18 @@ class MessageTest(unittest.TestCase):
                 background-color: orange;
                 color: white;
             }
-            """
-        ),
+            """),
         message.UserMessage('hi').to_html().style_section,
     )
 
   def test_html_user_message(self):
     self.assert_html_content(
-        message.UserMessage(
-            'what is a <div>'
-        ).to_html(enable_summary_tooltip=False),
+        message.UserMessage('what is a <div>').to_html(
+            enable_summary_tooltip=False
+        ),
         """
         <details open class="pyglove user-message lf-message"><summary><div class="summary-title lf-message">UserMessage(...)</div></summary><div class="complex_value"><div class="message-tags"></div><div class="message-text">what is a &lt;div&gt;</div><div class="message-metadata"><details open class="pyglove dict message-metadata"><summary><div class="summary-name message-metadata">metadata<span class="tooltip message-metadata">metadata</span></div><div class="summary-title message-metadata">Dict(...)</div></summary><div class="complex-value dict"><span class="empty-container"></span></div></details></div></div></details>
-        """
+        """,
     )
     image = CustomModality('bird')
     self.assert_html_content(
@@ -449,11 +462,11 @@ class MessageTest(unittest.TestCase):
             referred_modalities=[image],
         ).to_html(
             enable_summary_tooltip=False,
-            extra_flags=dict(include_message_metadata=False)
+            extra_flags=dict(include_message_metadata=False),
         ),
         """
         <details open class="pyglove user-message lf-message"><summary><div class="summary-title lf-message">UserMessage(...)</div></summary><div class="complex_value"><div class="message-tags"><span>lm-input</span></div><div class="message-text">what is this<div class="modality-in-text"><details class="pyglove custom-modality"><summary><div class="summary-name">custom_modality:abaecf8c<span class="tooltip"></span></div><div class="summary-title">CustomModality(...)</div></summary><div class="complex-value custom-modality"><details open class="pyglove str"><summary><div class="summary-name">content<span class="tooltip">content</span></div><div class="summary-title">str</div></summary><span class="simple-value str">&#x27;bird&#x27;</span></details></div></details></div></div></div></details>
-        """
+        """,
     )
 
   def test_html_ai_message(self):
@@ -462,7 +475,7 @@ class MessageTest(unittest.TestCase):
         f'What is in this image? <<[[{image.id}]]>> this is a test',
         referred_modalities=[image],
         source=message.UserMessage('User input'),
-        tags=['lm-input']
+        tags=['lm-input'],
     )
     ai_message = message.AIMessage(
         'My name is Gemini',
@@ -573,20 +586,14 @@ class MessageConverterTest(unittest.TestCase):
     self.assertIn(tuple, message.Message.convertible_types())
     self.assertEqual(
         message.Message.from_value(1, format='test_format1'),
-        message.UserMessage('1')
+        message.UserMessage('1'),
     )
-    self.assertEqual(
-        message.UserMessage('1').as_format('test_format1'),
-        1
-    )
+    self.assertEqual(message.UserMessage('1').as_format('test_format1'), 1)
     self.assertEqual(
         message.Message.from_value(1, format='test_format2'),
-        message.UserMessage('0')
+        message.UserMessage('0'),
     )
-    self.assertEqual(
-        message.UserMessage('1').as_format('test_format2'),
-        2
-    )
+    self.assertEqual(message.UserMessage('1').as_format('test_format2'), 2)
     with self.assertRaisesRegex(ValueError, 'Unsupported format: .*'):
       message.UserMessage('1').as_format('test4')
 
@@ -598,16 +605,11 @@ class MessageConverterTest(unittest.TestCase):
     ):
       message.UserMessage('1').as_format(int)
     self.assertEqual(
-        message.UserMessage('1,2,3').as_format('test_format3'),
-        (1, 2, 3)
+        message.UserMessage('1,2,3').as_format('test_format3'), (1, 2, 3)
     )
+    self.assertEqual(message.UserMessage('1,2,3').as_format(tuple), (1, 2, 3))
     self.assertEqual(
-        message.UserMessage('1,2,3').as_format(tuple),
-        (1, 2, 3)
-    )
-    self.assertEqual(
-        message.Message.from_value((1, 2, 3)),
-        message.UserMessage('1,2,3')
+        message.Message.from_value((1, 2, 3)), message.UserMessage('1,2,3')
     )
     message.MessageConverter._REGISTRY.unregister(TestConverter)
     message.MessageConverter._REGISTRY.unregister(TestConverter2)
@@ -662,6 +664,7 @@ class MessageConverterTest(unittest.TestCase):
       message.MessageConverter._safe_read(1, 'a')
     with self.assertRaisesRegex(ValueError, 'Missing key .*'):
       message.MessageConverter._safe_read({'a': 1}, 'b')
+
 
 if __name__ == '__main__':
   unittest.main()

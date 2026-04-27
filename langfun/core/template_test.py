@@ -25,6 +25,13 @@ from langfun.core.template import TemplateRenderEvent
 import pyglove as pg
 
 
+class CustomModality(modality.Modality):
+  content: str
+
+  def to_bytes(self):
+    return self.content.encode()
+
+
 class BasicTest(unittest.TestCase):
 
   def test_rebind(self):
@@ -207,6 +214,12 @@ class DefinitionTest(unittest.TestCase):
         'Google is Google'
     )
 
+  def test_clone(self):
+    t = Template('Hello')
+    t._referred_modalities = []
+    t2 = t.clone()
+    self.assertIs(t2._referred_modalities, t._referred_modalities)
+
 
 class FromValueTest(unittest.TestCase):
 
@@ -216,19 +229,16 @@ class FromValueTest(unittest.TestCase):
     self.assertEqual(t.render(), 'Hello 1')
 
   def test_from_message(self):
-    class CustomModality(modality.Modality):
-      content: str
-
-      def to_bytes(self):
-        return self.content.encode()
 
     message = Template('{{image}}', image=CustomModality('foo')).render()
     t = Template.from_value(message)
+    self.assertIs(t._referred_modalities, message.referred_modalities)
     m = t.render()
     self.assertTrue(
         pg.eq(m.modalities(), [CustomModality('foo')])
     )
     self.assertEqual(message.metadata, m.metadata)
+    self.assertIs(t._referred_modalities, message.referred_modalities)
 
   def test_from_message_convertible(self):
 
@@ -254,6 +264,14 @@ class FromValueTest(unittest.TestCase):
     self.assertTrue(pg.eq(t, t2))
     self.assertEqual(t2.x, 1)
 
+    # Test with modalities.
+    message = Template('{{image}}', image=CustomModality('foo')).render()
+    t_mod = Template.from_value(message)
+
+    t3 = Template.from_value(t_mod, x=1)
+    self.assertIsNot(t3, t_mod)
+    self.assertIs(t3._referred_modalities, t_mod._referred_modalities)
+
   def test_from_different_template(self):
     t = Template('Hello {{x}}', x=1)
 
@@ -264,6 +282,13 @@ class FromValueTest(unittest.TestCase):
     self.assertIsInstance(t2, MyTemplate)
     self.assertEqual(t2.template_str, t.template_str)
     self.assertEqual(t2.x, 2)
+
+    # Test with modalities.
+    message = Template('{{image}}', image=CustomModality('foo')).render()
+    t_mod = Template.from_value(message)
+
+    t3 = MyTemplate.from_value(t_mod)
+    self.assertIs(t3._referred_modalities, message.referred_modalities)
 
   def test_from_python_object(self):
     t = Template.from_value(pg.Dict(x=1, y=2))
@@ -415,11 +440,6 @@ class RenderTest(unittest.TestCase):
     self.assertEqual(l.render(), '1 + 2 =')
 
   def test_render_with_modality(self):
-    class CustomModality(modality.Modality):
-      content: str
-
-      def to_bytes(self):
-        return self.content.encode()
 
     foo = CustomModality('foo')
     message = Template('This is {{ x }} and {{ a }}', x=1, a=foo).render()

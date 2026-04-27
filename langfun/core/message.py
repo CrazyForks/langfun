@@ -20,11 +20,29 @@ import contextlib
 import functools
 import inspect
 import io
-from typing import Annotated, Any, Callable, ClassVar, Optional, Type, Union
+from typing import Annotated, Any, Callable, ClassVar, Literal, Optional, Type, Union
 
 from langfun.core import modality
 from langfun.core import natural_language
 import pyglove as pg
+
+
+@contextlib.contextmanager
+def treat_unknown_modality_marker(
+    treatment: Literal['raise', 'drop', 'keep'] = 'raise',
+):
+  """Context manager to determine action on unknown modality markers.
+
+  This setting is per-thread and will propagate with `lf.concurrent_map`.
+
+  Args:
+    treatment: The treatment for unknown modality markers.
+      - 'raise': Raise a ValueError (default).
+      - 'drop': Log a warning and drop the marker.
+      - 'keep': Log a warning and keep the marker as text.
+  """
+  with pg.contextual_override(__unknown_modality_marker_treatment__=treatment):
+    yield
 
 
 class Message(
@@ -504,11 +522,32 @@ class Message(
       var_name = text[var_start:ref_end].strip()
       var_value = self.get_modality(var_name)
       if var_value is None:
-        raise ValueError(
-            f'Unknown modality reference: {var_name!r}. '
-            'Please make sure the modality object is present in '
-            f'`referred_modalities` when creating {self.__class__.__name__}.'
+        treatment = pg.contextual_value(
+            '__unknown_modality_marker_treatment__', 'raise'
         )
+        if treatment == 'raise':
+          raise ValueError(
+              f'Unknown modality reference: {var_name!r}. '
+              'Please make sure the modality object is present in '
+              f'`referred_modalities` when creating {self.__class__.__name__}.'
+          )
+        elif treatment == 'drop':
+          pg.logging.warning(f'Unknown modality reference: {var_name!r}')
+          add_text_chunk(text[chunk_start:ref_start].strip(' '))
+          chunk_start = ref_end + len(modality.Modality.REF_END)
+          continue
+        elif treatment == 'keep':
+          pg.logging.warning(f'Unknown modality reference: {var_name!r}')
+          add_text_chunk(
+              text[
+                  chunk_start : ref_end + len(modality.Modality.REF_END)
+              ].strip(' ')
+          )
+          chunk_start = ref_end + len(modality.Modality.REF_END)
+          continue
+        else:
+          raise ValueError(f'Invalid treatment: {treatment!r}')
+
       add_text_chunk(text[chunk_start:ref_start].strip(' '))
       chunks.append(var_value)
       chunk_start = ref_end + len(modality.Modality.REF_END)

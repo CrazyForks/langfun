@@ -87,6 +87,9 @@ from langfun.core.concurrent import with_retry
 # Interface for natural language formattable.
 from langfun.core.natural_language import NaturalLanguageFormattable
 
+# Context manager for handling unknown modality markers.
+from langfun.core.message import treat_unknown_modality_marker
+
 # Input/output protocols.
 from langfun.core.message import Message
 from langfun.core.message import UserMessage

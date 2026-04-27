@@ -246,7 +246,12 @@ class Template(
 
     # Last render output.
     self._cached_render_output = None
-    self._referred_modalities = None
+
+    # Referred modalities from template_str if the template_str contains
+    # rendered modality references in `{{<<...>>}}` format.
+    # We carry referred_modalities even when rebind happens.
+    if '_referred_modalities' not in self.__dict__:
+      self._referred_modalities = None
 
   @property
   def render_output(self) -> message_lib.Message | None:
@@ -554,6 +559,11 @@ class Template(
     """Returns the natural language format representation."""
     return self.render(allow_partial=True, implicit=True).text
 
+  def _sym_clone(self, *args, **kwargs) -> 'Template':
+    copy = super()._sym_clone(*args, **kwargs)
+    copy._referred_modalities = self._referred_modalities  # pylint: disable=protected-access
+    return copy
+
   def __eq__(self, other: Any) -> bool:
     if isinstance(other, str):
       return not self.missing_vars and str(self) == other
@@ -664,6 +674,7 @@ class Template(
       return cls(template_str=value, **kwargs)
     if isinstance(value, Template):
       lfun = cls(template_str=value.template_str, **kwargs)  # pylint: disable=attribute-error
+      lfun._referred_modalities = value._referred_modalities  # pylint: disable=protected-access
       # So lfun could acccess all attributes from value.
       lfun.sym_setparent(value)
       return lfun
