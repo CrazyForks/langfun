@@ -307,12 +307,14 @@ class AnthropicTest(unittest.TestCase):
     self.assertIsNone(model.model_info.knowledge_cutoff)
 
   def test_thinking_param_true_adaptive(self):
-    """Claude 4.6 + thinking=True -> adaptive thinking, no budget needed."""
-    lm = anthropic.Claude46Opus(api_key='fake', thinking=True)
+    """Claude 4.7 + thinking=True -> adaptive thinking, no budget needed."""
+    lm = anthropic.Claude47Opus(api_key='fake', thinking=True)
     args = lm._request_args(lf.LMSamplingOptions(
         max_tokens=1000, temperature=0.5
     ))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
+    )
     self.assertEqual(args['max_tokens'], 1000)
     self.assertNotIn('temperature', args)
 
@@ -328,13 +330,18 @@ class AnthropicTest(unittest.TestCase):
     self.assertEqual(args['max_tokens'], 2024)
     self.assertNotIn('temperature', args)
 
-  def test_thinking_param_true_manual_no_budget_raises(self):
-    """Older model + thinking=True WITHOUT max_thinking_tokens -> error."""
+  def test_thinking_param_true_manual_no_budget_defaults(self):
+    """Older model + thinking=True WITHOUT budget -> defaults to 50% max."""
     lm = anthropic.Claude35Sonnet(api_key='fake', thinking=True)
-    with self.assertRaises(ValueError):
-      lm._request_args(lf.LMSamplingOptions(
-          max_tokens=1000, temperature=0.5
-      ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=8192, temperature=0.5)
+    )
+    # 8192 // 2 = 4096
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 4096}
+    )
+    # max_tokens remains unchanged because 8192 > 4096
+    self.assertEqual(args['max_tokens'], 8192)
 
   def test_thinking_param_false_no_thinking(self):
     """thinking=False -> no thinking config, temperature preserved."""
@@ -384,11 +391,13 @@ class AnthropicTest(unittest.TestCase):
     self.assertNotIn('temperature', args)
 
   def test_thinking_options_adaptive(self):
-    lm = anthropic.Claude46Opus(api_key='fake')
+    lm = anthropic.Claude47Opus(api_key='fake')
     args = lm._request_args(lf.LMSamplingOptions(
         max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
     ))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
+    )
     self.assertEqual(args['max_tokens'], 1000)
     self.assertNotIn('temperature', args)
 
@@ -462,18 +471,20 @@ class AnthropicTest(unittest.TestCase):
 
   def test_thinking_adaptive_with_max_thinking_tokens_set(self):
     """Adaptive model with thinking=True AND max_thinking_tokens should use adaptive (not manual)."""
-    model = anthropic.Claude46Opus(api_key='test_key', thinking=True)
+    model = anthropic.Claude47Opus(api_key='test_key', thinking=True)
     args = model._request_args(
         lf.LMSamplingOptions(max_tokens=1000, max_thinking_tokens=2048)
     )
     # Should be adaptive, not manual, even though max_thinking_tokens is set
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
+    )
     # budget_tokens should NOT be present
     self.assertNotIn('budget_tokens', args['thinking'])
 
   def test_thinking_removes_temperature_top_k_top_p(self):
     """When thinking is enabled, temperature/top_k/top_p should be removed."""
-    model = anthropic.Claude46Opus(api_key='test_key', thinking=True)
+    model = anthropic.Claude47Opus(api_key='test_key', thinking=True)
     args = model._request_args(
         lf.LMSamplingOptions(
             max_tokens=1000, temperature=0.7, top_k=40, top_p=0.9
@@ -482,7 +493,9 @@ class AnthropicTest(unittest.TestCase):
     self.assertNotIn('temperature', args)
     self.assertNotIn('top_k', args)
     self.assertNotIn('top_p', args)
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
+    )
 
   def test_thinking_manual_max_tokens_adjustment(self):
     """When max_tokens < max_thinking_tokens, max_tokens should be increased."""
@@ -512,7 +525,7 @@ class AnthropicTest(unittest.TestCase):
     """Test LLM instantiation from model URI string for Claude 4.6 Opus."""
     model = lf.LanguageModel.get('claude-opus-4-6?api_key=test_key')
     self.assertIsInstance(model, anthropic.Anthropic)
-    self.assertTrue(model._use_adaptive_thinking)
+    self.assertFalse(model._use_adaptive_thinking)
 
   def test_model_uri_instantiation_with_thinking_true(self):
     """Test model URI with thinking=true parameter."""
@@ -520,9 +533,14 @@ class AnthropicTest(unittest.TestCase):
         'claude-opus-4-6?api_key=test_key&thinking=true'
     )
     self.assertTrue(model.thinking)
-    self.assertTrue(model._use_adaptive_thinking)
-    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertFalse(model._use_adaptive_thinking)
+    # Now requires manual budget tokens.
+    args = model._request_args(
+        lf.LMSamplingOptions(max_tokens=1024, max_thinking_tokens=1024)
+    )
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
+    )
 
   def test_model_uri_instantiation_with_thinking_true_uppercase(self):
     """Test model URI with thinking=True parameter (uppercase)."""
@@ -530,9 +548,13 @@ class AnthropicTest(unittest.TestCase):
         'claude-opus-4-6?api_key=test_key&thinking=True'
     )
     self.assertTrue(model.thinking)
-    self.assertTrue(model._use_adaptive_thinking)
-    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertFalse(model._use_adaptive_thinking)
+    args = model._request_args(
+        lf.LMSamplingOptions(max_tokens=1024, max_thinking_tokens=1024)
+    )
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
+    )
 
   def test_model_uri_instantiation_user_scenario(self):
     """Test model URI with user's specific scenario."""
@@ -540,9 +562,13 @@ class AnthropicTest(unittest.TestCase):
         'claude-opus-4-6?project=lf-agent&location=us-east5&max_attempts=80&timeout=300&thinking=True'
     )
     self.assertTrue(model.thinking)
-    self.assertTrue(model._use_adaptive_thinking)
-    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertFalse(model._use_adaptive_thinking)
+    args = model._request_args(
+        lf.LMSamplingOptions(max_tokens=1024, max_thinking_tokens=1024)
+    )
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
+    )
 
   def test_model_uri_instantiation_with_thinking_false(self):
     """Test model URI with thinking=false parameter."""
@@ -567,8 +593,11 @@ class AnthropicTest(unittest.TestCase):
     )
     self.assertTrue(model.thinking)
     self.assertFalse(model._use_adaptive_thinking)
-    with self.assertRaises(ValueError):
-      model._request_args(lf.LMSamplingOptions(max_tokens=1024))
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
+    )
+    self.assertEqual(args['max_tokens'], 2048)
 
   def test_model_uri_instantiation_opus_4_7(self):
     """Test LLM instantiation from model URI for Claude Opus 4.7."""
@@ -664,25 +693,55 @@ class AnthropicTest(unittest.TestCase):
     ))
     self.assertEqual(args['output_config'], {'effort': 'low'})
 
-  def test_opus46_effort_config_with_thinking(self):
-    """Claude 4.6 with thinking has output_config from default effort."""
-    lm = anthropic.Claude46Opus(api_key='fake', thinking=True)
+  def test_opus46_effort_config_no_effect(self):
+    """Claude 4.6 has no adaptive effort configuration since it uses manual budget."""
+    lm = anthropic.Claude46Opus(api_key='fake', thinking=True, effort='high')
     args = lm._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
+        lf.LMSamplingOptions(max_tokens=1024, max_thinking_tokens=1024)
     )
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
-    self.assertEqual(args['output_config'], {'effort': 'high'})
-
-  def test_opus46_effort_none_no_output_config(self):
-    """Claude 4.6 with effort=None should NOT have output_config."""
-    lm = anthropic.Claude46Opus(
-        api_key='fake', thinking=True, effort=None
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
     )
-    args = lm._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
     self.assertNotIn('output_config', args)
+
+  def test_thinking_overflow_guardrail_honors_model_limit(self):
+    """Test that forcing overflow clamps max_tokens and contracts budget safely."""
+    # Max output limit for Claude46 is 128,000.
+    lm = anthropic.Claude46Opus(api_key='fake', thinking=True)
+
+    # Case 1: Absolute overflow where user forces budget to equal max model cap.
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=128000, max_thinking_tokens=128000)
+    )
+    # Must clamp back to 128k
+    self.assertEqual(args['max_tokens'], 128000)
+    # Must contract budget to 128k - 1024 = 126976
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 126976}
+    )
+
+    # Case 2: Extreme total overage beyond physical limit.
+    args2 = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=150000, max_thinking_tokens=150000)
+    )
+    self.assertEqual(args2['max_tokens'], 128000)
+    self.assertEqual(args2['thinking']['budget_tokens'], 126976)
+
+  def test_thinking_extreme_small_max_tokens(self):
+    """Tests that absurdity small max_tokens correctly pads to safe harbor."""
+    lm = anthropic.Claude46Opus(api_key='fake', thinking=True)
+    args = lm._request_args(lf.LMSamplingOptions(max_tokens=10))
+    # budget defaults to 1024. max_tokens becomes 10 + 1024 = 1034.
+    self.assertEqual(args['max_tokens'], 1034)
+    self.assertEqual(args['thinking']['budget_tokens'], 1024)
+
+  def test_thinking_boundary_condition_exact_threshold(self):
+    """Tests exact limit case for max_tokens vs budget calculation."""
+    lm = anthropic.Claude46Opus(api_key='fake', thinking=True)
+    args = lm._request_args(lf.LMSamplingOptions(max_tokens=1024))
+    # budget defaults to 1024. 1024 <= 1024 triggers, doubling to 2048.
+    self.assertEqual(args['max_tokens'], 2048)
+    self.assertEqual(args['thinking']['budget_tokens'], 1024)
 
 
 if __name__ == '__main__':

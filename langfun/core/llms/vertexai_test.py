@@ -241,23 +241,27 @@ class VertexAIAnthropicTest(unittest.TestCase):
     )
 
   def test_thinking_param_true_adaptive_vertexai(self):
-    """VertexAI Claude 4.6 + thinking=True -> adaptive thinking."""
-    lm = vertexai.VertexAIClaude46Opus(
-        project='test', location='us-east5', thinking=True
+    """VertexAI Claude 4.7 + thinking=True -> adaptive thinking."""
+    lm = vertexai.VertexAIClaude47Opus(
+        project='test', location='global', thinking=True
     )
     args = lm._request_args(lf.LMSamplingOptions(
         max_tokens=1000, temperature=0.5
     ))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
+    )
     self.assertEqual(args['max_tokens'], 1000)
     self.assertNotIn('temperature', args)
 
   def test_thinking_options_adaptive_vertexai(self):
-    lm = vertexai.VertexAIClaude46Opus(project='test', location='us-east5')
+    lm = vertexai.VertexAIClaude47Opus(project='test', location='global')
     args = lm._request_args(lf.LMSamplingOptions(
         max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
     ))
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
+    )
     self.assertEqual(args['max_tokens'], 1000)
     self.assertNotIn('temperature', args)
 
@@ -286,7 +290,7 @@ class VertexAIAnthropicTest(unittest.TestCase):
         '&location=us-east5&max_attempts=80&timeout=300'
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
-    self.assertTrue(model._use_adaptive_thinking)
+    self.assertFalse(model._use_adaptive_thinking)
 
   def test_model_uri_vertexai_claude46_thinking_true(self):
     """Test VertexAI Claude 4.6 model URI with thinking=true."""
@@ -296,11 +300,13 @@ class VertexAIAnthropicTest(unittest.TestCase):
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
     self.assertTrue(model.thinking)
-    self.assertTrue(model._use_adaptive_thinking)
+    self.assertFalse(model._use_adaptive_thinking)
     args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
+        lf.LMSamplingOptions(max_tokens=1024, max_thinking_tokens=1024)
     )
-    self.assertEqual(args['thinking'], {'type': 'adaptive'})
+    self.assertEqual(
+        args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
+    )
     self.assertNotIn('temperature', args)
 
   def test_model_uri_vertexai_claude46_thinking_false(self):

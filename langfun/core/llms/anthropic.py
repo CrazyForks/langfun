@@ -909,9 +909,7 @@ class Anthropic(rest.REST):
 
   @property
   def _use_adaptive_thinking(self) -> bool:
-    return self.model is not None and (
-        'claude-opus-4-6' in self.model_id or 'claude-opus-4-7' in self.model_id
-    )
+    return self.model is not None and 'claude-opus-4-7' in self.model_id
 
   def request(
       self,
@@ -980,22 +978,31 @@ class Anthropic(rest.REST):
         if effort:
           args['output_config'] = {'effort': effort}
       else:
-        if options.max_thinking_tokens is None:
-          raise ValueError(
-              'max_thinking_tokens must be set when thinking is enabled '
-              'for non-adaptive thinking models.'
-          )
+        budget = options.max_thinking_tokens
+        if budget is None:
+          # Default to 50% of the total capacity, ensuring at least 1024.
+          budget = max(1024, args['max_tokens'] // 2)
+
         args['thinking'] = {
             'type': 'enabled',
-            # Minimum budget is 1,024 tokens.
-            'budget_tokens': (
-                options.max_thinking_tokens
-            ),
+            'budget_tokens': budget,
         }
         # max_tokens, which is thinking tokens + response tokens, must be
         # greater than the thinking tokens.
-        if args['max_tokens'] < options.max_thinking_tokens:
-          args['max_tokens'] += options.max_thinking_tokens
+        if args['max_tokens'] <= budget:
+          args['max_tokens'] += budget
+
+        # Ensure max_tokens does not exceed model's absolute hard capacity.
+        model_cap = self.model_info.context_length.max_output_tokens
+        if args['max_tokens'] > model_cap:
+          args['max_tokens'] = model_cap
+
+        # If forced to clamp max_tokens, ensure budget remains strictly less.
+        if budget >= args['max_tokens']:
+          # Reserve 1024 tokens for final text response, ensuring budget is
+          # valid.
+          budget = max(1024, args['max_tokens'] - 1024)
+          args['thinking']['budget_tokens'] = budget
 
       # Thinking isn't compatible with temperature, top_p, or top_k.
       # https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
