@@ -806,6 +806,59 @@ SUPPORTED_MODELS = [
 _SUPPORTED_MODELS_BY_MODEL_ID = {m.model_id: m for m in SUPPORTED_MODELS}
 
 
+def _apply_cache_breakpoints(
+    request: dict[str, Any],
+    *,
+    cache_system: bool = True,
+    cache_last_message: bool = True,
+) -> dict[str, Any]:
+  """Mutates `request` in place to add Anthropic ephemeral cache_control breakpoints.
+
+  Anthropic's prompt-caching API requires per-block markers inside
+  messages[].content[].cache_control and system[].cache_control. Top-level
+  cache_control is a no-op for caching large static prefixes.
+
+  Args:
+    request: An Anthropic request dict produced by Anthropic.request(). May
+      contain 'system' as a bare string (current Anthropic.request shape) or a
+      list of content blocks.
+    cache_system: If True and request has a 'system' field, ensure it is in
+      list-of-blocks form and stamp cache_control on the LAST system block.
+    cache_last_message: If True, stamp cache_control on the LAST content block
+      of the LAST entry in request['messages'].
+
+  Returns:
+    The mutated request (same object).
+
+  """
+  if not request:
+    return request
+
+  cache_ctrl = {'type': 'ephemeral'}
+
+  if cache_system and 'system' in request and request['system']:
+    sys = request['system']
+    if isinstance(sys, str):
+      request['system'] = [
+          {'type': 'text', 'text': sys, 'cache_control': cache_ctrl}
+      ]
+    elif isinstance(sys, list) and sys:
+      # Add it to the last element if not already present
+      if 'cache_control' not in sys[-1]:
+        sys[-1]['cache_control'] = cache_ctrl
+
+  if cache_last_message and 'messages' in request and request['messages']:
+    msgs = request['messages']
+    last_msg = msgs[-1]
+    if 'content' in last_msg and last_msg['content']:
+      content = last_msg['content']
+      if isinstance(content, list) and content:
+        if 'cache_control' not in content[-1]:
+          content[-1]['cache_control'] = cache_ctrl
+
+  return request
+
+
 @lf.use_init_args(['model'])
 class Anthropic(rest.REST):
   """Anthropic Claude models.
@@ -936,6 +989,14 @@ class Anthropic(rest.REST):
         prompt.as_format('anthropic', chunk_preprocessor=modality_check)
     ]
     request.update(messages=messages)
+
+    # Anthropic prompt caching is enabled by default for all requests. The
+    # cache_control stamps are additive — Anthropic ignores them on
+    # non-cacheable models, so there is no behavioral risk for callers using
+    # legacy/non-cacheable Claude variants. Mirrors Gemini 2.5/3.x implicit
+    # prompt caching: users do nothing; the system maximizes cache hits.
+    _apply_cache_breakpoints(request)
+
     return request
 
   def _request_args(self, options: lf.LMSamplingOptions) -> dict[str, Any]:

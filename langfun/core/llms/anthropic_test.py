@@ -14,6 +14,7 @@
 """Tests for Anthropic models."""
 
 import base64
+import copy
 import datetime
 import os
 from typing import Any
@@ -50,6 +51,10 @@ def mock_requests_post(url: str, json: dict[str, Any], **kwargs):
 
   processed_text_parts = []
   if system_prompt_text:
+    if isinstance(system_prompt_text, list):
+      system_prompt_text = '\n'.join(
+          [x['text'] for x in system_prompt_text if 'text' in x]
+      )
     processed_text_parts.append(system_prompt_text)
   if messages_payload_text:
     processed_text_parts.append(messages_payload_text)
@@ -152,11 +157,11 @@ class AnthropicTest(unittest.TestCase):
     # Alias will be normalized to the official version.
     self.assertEqual(
         anthropic.Anthropic('claude-3-5-sonnet-20241022').model_id,
-        'claude-3-5-sonnet-20241022'
+        'claude-3-5-sonnet-20241022',
     )
     self.assertEqual(
         anthropic.Anthropic('claude-3-5-sonnet-v2@20241022').model_id,
-        'claude-3-5-sonnet-20241022'
+        'claude-3-5-sonnet-20241022',
     )
 
   def test_api_key(self):
@@ -198,9 +203,7 @@ class AnthropicTest(unittest.TestCase):
       mock_request.side_effect = mock_requests_post
       lm = anthropic.Claude3Haiku(api_key='fake_key')
       response = lm(
-          lf.UserMessage(
-              'hello', system_message=lf.SystemMessage('system')
-          ),
+          lf.UserMessage('hello', system_message=lf.SystemMessage('system')),
           temperature=0.0,
           top_k=0.1,
           top_p=0.2,
@@ -250,9 +253,7 @@ class AnthropicTest(unittest.TestCase):
           413, 'bad_request', 'Prompt is too long.'
       )
       lm = anthropic.Claude3Haiku(api_key='fake_key')
-      with self.assertRaisesRegex(
-          lf.ContextLimitError, 'Prompt is too long.'
-      ):
+      with self.assertRaisesRegex(lf.ContextLimitError, 'Prompt is too long.'):
         lm('hello', max_attempts=1)
 
   def test_call_with_context_limit_error_400(self):
@@ -291,9 +292,12 @@ class AnthropicTest(unittest.TestCase):
   def test_knowledge_cutoff(self):
     # Check that claude-opus-4-6 entries have the correct knowledge cutoff.
     opus_entries = [
-        info for info in anthropic.SUPPORTED_MODELS
-        if (info.model_id == 'claude-opus-4-6'
-            or info.alias_for == 'claude-opus-4-6')
+        info
+        for info in anthropic.SUPPORTED_MODELS
+        if (
+            info.model_id == 'claude-opus-4-6'
+            or info.alias_for == 'claude-opus-4-6'
+        )
     ]
     self.assertEqual(len(opus_entries), 2)
     for entry in opus_entries:
@@ -309,9 +313,9 @@ class AnthropicTest(unittest.TestCase):
   def test_thinking_param_true_adaptive(self):
     """Claude 4.7 + thinking=True -> adaptive thinking, no budget needed."""
     lm = anthropic.Claude47Opus(api_key='fake', thinking=True)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertEqual(
         args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
     )
@@ -321,9 +325,11 @@ class AnthropicTest(unittest.TestCase):
   def test_thinking_param_true_manual(self):
     """Older model + thinking=True + max_thinking_tokens -> manual thinking."""
     lm = anthropic.Claude35Sonnet(api_key='fake', thinking=True)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertEqual(
         args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
     )
@@ -346,44 +352,50 @@ class AnthropicTest(unittest.TestCase):
   def test_thinking_param_false_no_thinking(self):
     """thinking=False -> no thinking config, temperature preserved."""
     lm = anthropic.Claude46Opus(api_key='fake', thinking=False)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertNotIn('thinking', args)
     self.assertEqual(args['temperature'], 0.5)
 
   def test_thinking_param_none_default_no_thinking(self):
     """Default thinking=None with no max_thinking_tokens -> no thinking."""
     lm = anthropic.Claude46Opus(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertNotIn('thinking', args)
     self.assertEqual(args['temperature'], 0.5)
 
   def test_thinking_false_overrides_max_thinking_tokens(self):
     """thinking=False + max_thinking_tokens -> NO thinking (False wins)."""
     lm = anthropic.Claude46Opus(api_key='fake', thinking=False)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertNotIn('thinking', args)
     self.assertEqual(args['temperature'], 0.5)
 
   def test_thinking_false_overrides_max_thinking_tokens_older_model(self):
     """thinking=False + max_thinking_tokens on older model -> NO thinking."""
     lm = anthropic.Claude35Sonnet(api_key='fake', thinking=False)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertNotIn('thinking', args)
     self.assertEqual(args['temperature'], 0.5)
 
   def test_thinking_options_older_model(self):
     lm = anthropic.Claude35Sonnet(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertEqual(
         args['thinking'], {'type': 'enabled', 'budget_tokens': 1024}
     )
@@ -392,9 +404,11 @@ class AnthropicTest(unittest.TestCase):
 
   def test_thinking_options_adaptive(self):
     lm = anthropic.Claude47Opus(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertEqual(
         args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
     )
@@ -403,9 +417,11 @@ class AnthropicTest(unittest.TestCase):
 
   def test_thinking_options_opus_4_7(self):
     lm = anthropic.Claude47Opus(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertEqual(
         args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
     )
@@ -415,30 +431,34 @@ class AnthropicTest(unittest.TestCase):
 
   def test_thinking_options_opus_4_7_with_effort(self):
     lm = anthropic.Claude47Opus(api_key='fake', effort='xhigh')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_thinking_tokens=1024, max_tokens=1000)
+    )
     self.assertEqual(args['output_config'], {'effort': 'xhigh'})
 
   def test_thinking_options_opus_4_7_with_reasoning_effort(self):
     lm = anthropic.Claude47Opus(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, reasoning_effort='low'
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, reasoning_effort='low'
+        )
+    )
     self.assertEqual(args['output_config'], {'effort': 'low'})
 
   def test_thinking_options_opus_4_7_no_effort(self):
     lm = anthropic.Claude47Opus(api_key='fake', effort=None)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_thinking_tokens=1024, max_tokens=1000)
+    )
     self.assertNotIn('output_config', args)
 
   def test_opus47_no_thinking_removes_sampling_params(self):
     lm = anthropic.Claude47Opus(api_key='fake', thinking=False)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5, top_k=40, top_p=0.9
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_tokens=1000, temperature=0.5, top_k=40, top_p=0.9
+        )
+    )
     self.assertNotIn('temperature', args)
     self.assertNotIn('top_k', args)
     self.assertNotIn('top_p', args)
@@ -446,26 +466,26 @@ class AnthropicTest(unittest.TestCase):
   def test_thinking_param_true_adaptive_opus_4_7(self):
     """Claude 4.7 + thinking=True -> adaptive thinking with summarized display."""
     lm = anthropic.Claude47Opus(api_key='fake', thinking=True)
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertEqual(
         args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
     )
 
   def test_opus46_no_thinking_by_default(self):
     lm = anthropic.Claude46Opus(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertNotIn('thinking', args)
     self.assertEqual(args['temperature'], 0.5)
 
   def test_older_model_no_thinking_by_default(self):
     lm = anthropic.Claude35Sonnet(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertNotIn('thinking', args)
     self.assertEqual(args['temperature'], 0.5)
 
@@ -601,9 +621,7 @@ class AnthropicTest(unittest.TestCase):
 
   def test_model_uri_instantiation_opus_4_7(self):
     """Test LLM instantiation from model URI for Claude Opus 4.7."""
-    model = lf.LanguageModel.get(
-        'claude-opus-4-7?api_key=test_key'
-    )
+    model = lf.LanguageModel.get('claude-opus-4-7?api_key=test_key')
     self.assertIsInstance(model, anthropic.Anthropic)
     self.assertTrue(model._use_adaptive_thinking)
     self.assertEqual(model.effort, 'high')
@@ -615,9 +633,7 @@ class AnthropicTest(unittest.TestCase):
     )
     self.assertTrue(model.thinking)
     self.assertTrue(model._use_adaptive_thinking)
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(
         args['thinking'],
         {'type': 'adaptive', 'display': 'summarized'},
@@ -630,30 +646,26 @@ class AnthropicTest(unittest.TestCase):
         'claude-opus-4-7?api_key=test_key&thinking=false'
     )
     self.assertFalse(model.thinking)
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('thinking', args)
     # Opus 4.7 still strips temperature/top_k/top_p
     self.assertNotIn('temperature', args)
 
   def test_model_uri_instantiation_opus_4_7_default(self):
     """Test Opus 4.7 model URI default (thinking=None)."""
-    model = lf.LanguageModel.get(
-        'claude-opus-4-7?api_key=test_key'
-    )
+    model = lf.LanguageModel.get('claude-opus-4-7?api_key=test_key')
     self.assertIsNone(model.thinking)
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('thinking', args)
 
   def test_opus47_default_no_thinking_strips_sampling_params(self):
     """Opus 4.7 strips temperature/top_k/top_p even without thinking."""
     lm = anthropic.Claude47Opus(api_key='fake')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.7, top_k=40, top_p=0.9
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_tokens=1000, temperature=0.7, top_k=40, top_p=0.9
+        )
+    )
     self.assertNotIn('thinking', args)
     self.assertNotIn('temperature', args)
     self.assertNotIn('top_k', args)
@@ -662,35 +674,27 @@ class AnthropicTest(unittest.TestCase):
   def test_opus47_effort_max(self):
     """Test Opus 4.7 with effort='max'."""
     lm = anthropic.Claude47Opus(api_key='fake', effort='max', thinking=True)
-    args = lm._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = lm._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(args['output_config'], {'effort': 'max'})
 
   def test_opus47_effort_medium(self):
     """Test Opus 4.7 with effort='medium'."""
     lm = anthropic.Claude47Opus(api_key='fake', effort='medium', thinking=True)
-    args = lm._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = lm._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(args['output_config'], {'effort': 'medium'})
 
   def test_opus47_effort_low(self):
     """Test Opus 4.7 with effort='low'."""
     lm = anthropic.Claude47Opus(api_key='fake', effort='low', thinking=True)
-    args = lm._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = lm._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(args['output_config'], {'effort': 'low'})
 
   def test_opus47_reasoning_effort_overrides_model_effort(self):
     """reasoning_effort in sampling options overrides model-level effort."""
-    lm = anthropic.Claude47Opus(
-        api_key='fake', effort='high', thinking=True
+    lm = anthropic.Claude47Opus(api_key='fake', effort='high', thinking=True)
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1024, reasoning_effort='low')
     )
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1024, reasoning_effort='low'
-    ))
     self.assertEqual(args['output_config'], {'effort': 'low'})
 
   def test_opus46_effort_config_no_effect(self):
@@ -742,6 +746,159 @@ class AnthropicTest(unittest.TestCase):
     # budget defaults to 1024. 1024 <= 1024 triggers, doubling to 2048.
     self.assertEqual(args['max_tokens'], 2048)
     self.assertEqual(args['thinking']['budget_tokens'], 1024)
+
+  def test_request_caching_default_on_no_extras_needed(self):
+    # User-perspective: vanilla Anthropic instantiation, no extras, no flags.
+    # Caching MUST be applied automatically (Gemini-implicit-style).
+    # Use whatever Sonnet variant exists.
+    model = anthropic.Claude35Sonnet_20241022()
+    prompt = lf.UserMessage('hello', system_message=lf.SystemMessage('sys'))
+    req = model.request(prompt, lf.LMSamplingOptions())  # NO extras at all
+    self.assertIsInstance(req['system'], list)
+    self.assertEqual(req['system'][0]['cache_control'], {'type': 'ephemeral'})
+    self.assertEqual(
+        req['messages'][-1]['content'][-1]['cache_control'],
+        {'type': 'ephemeral'},
+    )
+
+  def test_request_caching_applied_to_anthropic_default(self):
+    lm = anthropic.Anthropic('claude-3-5-sonnet-20241022')
+    prompt = lf.UserMessage('hello', system_message=lf.SystemMessage('sys'))
+    options = lf.LMSamplingOptions()
+    req = lm.request(prompt, options)
+
+    self.assertIsInstance(req['system'], list)
+    self.assertEqual(req['system'][0]['cache_control'], {'type': 'ephemeral'})
+    self.assertEqual(
+        req['messages'][-1]['content'][-1]['cache_control'],
+        {'type': 'ephemeral'},
+    )
+
+  def test_request_caching_works_on_opus_subclass(self):
+    lm = anthropic.Claude3Opus(api_key='fake')
+    prompt = lf.UserMessage('hello', system_message=lf.SystemMessage('sys'))
+    options = lf.LMSamplingOptions(extras={'enable_prompt_caching': True})
+    req = lm.request(prompt, options)
+
+    self.assertIsInstance(req['system'], list)
+    self.assertEqual(req['system'][0]['cache_control'], {'type': 'ephemeral'})
+    self.assertEqual(
+        req['messages'][-1]['content'][-1]['cache_control'],
+        {'type': 'ephemeral'},
+    )
+
+
+class AnthropicCachingTest(unittest.TestCase):
+
+  def test_helper_stamps_system_string_to_block_list(self):
+    request = {'system': 'sys text', 'messages': []}
+    anthropic._apply_cache_breakpoints(request)
+    self.assertIsInstance(request['system'], list)
+    self.assertEqual(len(request['system']), 1)
+    self.assertEqual(request['system'][0]['type'], 'text')
+    self.assertEqual(request['system'][0]['text'], 'sys text')
+    self.assertEqual(
+        request['system'][0]['cache_control'], {'type': 'ephemeral'}
+    )
+
+  def test_helper_stamps_last_message_last_block(self):
+    messages = [{
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'a'},
+            {'type': 'text', 'text': 'b'},
+        ],
+    }]
+    request = {'messages': messages}
+    anthropic._apply_cache_breakpoints(request)
+    content = request['messages'][-1]['content']
+    self.assertNotIn('cache_control', content[0])
+    self.assertEqual(content[1]['cache_control'], {'type': 'ephemeral'})
+
+  def test_helper_idempotent(self):
+    request_in = {
+        'system': 'sys text',
+        'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}
+        ],
+    }
+    once = anthropic._apply_cache_breakpoints(copy.deepcopy(request_in))
+    twice = anthropic._apply_cache_breakpoints(copy.deepcopy(once))
+    self.assertEqual(once, twice)
+    # Also verify no double-stamp: system list still has exactly one element
+    # with cache_control.
+    self.assertEqual(len(twice['system']), 1)
+    self.assertEqual(
+        twice['system'][-1]['cache_control'], {'type': 'ephemeral'}
+    )
+    # And the last message's last content block has cache_control exactly once.
+    last_block = twice['messages'][-1]['content'][-1]
+    self.assertEqual(last_block['cache_control'], {'type': 'ephemeral'})
+
+  def test_helper_handles_image_block_as_last(self):
+    messages = [{
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'foo'},
+            {'type': 'image', 'source': {'data': 'img'}},
+        ],
+    }]
+    request = {'messages': messages}
+    anthropic._apply_cache_breakpoints(request)
+    self.assertEqual(
+        request['messages'][-1]['content'][-1]['cache_control'],
+        {'type': 'ephemeral'},
+    )
+
+  def test_helper_skip_system_when_cache_system_false(self):
+    request = {'system': 'sys text', 'messages': []}
+    anthropic._apply_cache_breakpoints(request, cache_system=False)
+    self.assertEqual(request['system'], 'sys text')
+
+  def test_helper_skip_last_message_when_cache_last_message_false(self):
+    request = {
+        'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'a'}]}
+        ]
+    }
+    anthropic._apply_cache_breakpoints(request, cache_last_message=False)
+    self.assertNotIn('cache_control', request['messages'][-1]['content'][0])
+
+  def test_adversarial_empty_or_missing(self):
+    # Empty messages - no op, no exception
+    request = {'messages': []}
+    anthropic._apply_cache_breakpoints(request)
+    self.assertEqual(request['messages'], [])
+
+    # Messages without content key
+    request = {'messages': [{'role': 'user'}]}
+    anthropic._apply_cache_breakpoints(request)
+    self.assertNotIn('content', request['messages'][0])
+
+    # System already list with cache control
+    request = {
+        'system': [{
+            'type': 'text',
+            'text': 'sys',
+            'cache_control': {'type': 'existing'},
+        }]
+    }
+    anthropic._apply_cache_breakpoints(request)
+    # Should not replace existing cache control
+    self.assertEqual(request['system'][0]['cache_control']['type'], 'existing')
+
+  def test_adversarial_long_and_unicode(self):
+    long_text = 'x' * 60000 + ' 日本語'
+    request = {
+        'system': long_text,
+        'messages': [{
+            'role': 'user',
+            'content': [{'type': 'text', 'text': 'こんにちは'}],
+        }],
+    }
+    anthropic._apply_cache_breakpoints(request)
+    self.assertIn('cache_control', request['system'][0])
+    self.assertIn('cache_control', request['messages'][-1]['content'][-1])
 
 
 if __name__ == '__main__':

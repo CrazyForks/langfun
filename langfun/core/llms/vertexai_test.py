@@ -35,7 +35,8 @@ class VertexAITest(unittest.TestCase):
 
     with self.assertRaisesRegex(ValueError, 'Please specify `location`'):
       _ = vertexai.VertexAIGemini15Pro(
-          project='abc', location=None)._api_initialized
+          project='abc', location=None
+      )._api_initialized
 
     self.assertTrue(
         vertexai.VertexAIGemini15Pro(
@@ -131,11 +132,11 @@ class VertexAITest(unittest.TestCase):
 
     with self.assertRaisesRegex(
         lf.concurrent.RetryError,
-        'Failed to refresh Google authentication credentials'
+        'Failed to refresh Google authentication credentials',
     ):
       with (
           mock.patch.object(auth, 'default') as mock_auth,
-          mock.patch.object(rest.REST, '_sample_single') as mock_sample_single
+          mock.patch.object(rest.REST, '_sample_single') as mock_sample_single,
       ):
         mock_auth.return_value = mock.MagicMock(), None
         mock_sample_single.side_effect = _auth_refresh_error
@@ -176,7 +177,7 @@ class VertexAIAnthropicTest(unittest.TestCase):
             'https://us-east5-aiplatform.googleapis.com/v1/projects/'
             'langfun/locations/us-east5/publishers/anthropic/'
             'models/claude-3-5-sonnet-v2@20241022:streamRawPredict'
-        )
+        ),
     )
     self.assertEqual(
         model.headers,
@@ -185,16 +186,22 @@ class VertexAIAnthropicTest(unittest.TestCase):
         },
     )
     request = model.request(
-        lf.UserMessage('hi'), lf.LMSamplingOptions(temperature=0.0),
+        lf.UserMessage('hi'),
+        lf.LMSamplingOptions(temperature=0.0),
     )
     self.assertEqual(
         request,
         {
             'anthropic_version': 'vertex-2023-10-16',
             'max_tokens': 8192,
-            'messages': [
-                {'content': [{'text': 'hi', 'type': 'text'}], 'role': 'user'}
-            ],
+            'messages': [{
+                'content': [{
+                    'cache_control': {'type': 'ephemeral'},
+                    'text': 'hi',
+                    'type': 'text',
+                }],
+                'role': 'user',
+            }],
             'stream': False,
             'temperature': 0.0,
             'top_k': 40,
@@ -231,6 +238,7 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_lm_get_at_latest_resolves_anthropic(self):
     """@latest suffix for Opus 4.6/4.7 resolves as Anthropic direct API."""
     from langfun.core.llms import anthropic  # pylint: disable=g-import-not-at-top
+
     self.assertIsInstance(
         lf.LanguageModel.get('claude-opus-4-6@latest'),
         anthropic.Anthropic,
@@ -245,9 +253,9 @@ class VertexAIAnthropicTest(unittest.TestCase):
     lm = vertexai.VertexAIClaude47Opus(
         project='test', location='global', thinking=True
     )
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(max_tokens=1000, temperature=0.5)
+    )
     self.assertEqual(
         args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
     )
@@ -256,9 +264,11 @@ class VertexAIAnthropicTest(unittest.TestCase):
 
   def test_thinking_options_adaptive_vertexai(self):
     lm = vertexai.VertexAIClaude47Opus(project='test', location='global')
-    args = lm._request_args(lf.LMSamplingOptions(
-        max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
-    ))
+    args = lm._request_args(
+        lf.LMSamplingOptions(
+            max_thinking_tokens=1024, max_tokens=1000, temperature=0.5
+        )
+    )
     self.assertEqual(
         args['thinking'], {'type': 'adaptive', 'display': 'summarized'}
     )
@@ -295,8 +305,7 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_model_uri_vertexai_claude46_thinking_true(self):
     """Test VertexAI Claude 4.6 model URI with thinking=true."""
     model = lf.LanguageModel.get(
-        'claude-opus-4-6?project=lf-agent'
-        '&location=us-east5&thinking=true'
+        'claude-opus-4-6?project=lf-agent&location=us-east5&thinking=true'
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
     self.assertTrue(model.thinking)
@@ -312,14 +321,11 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_model_uri_vertexai_claude46_thinking_false(self):
     """Test VertexAI Claude 4.6 model URI with thinking=false."""
     model = lf.LanguageModel.get(
-        'claude-opus-4-6?project=lf-agent'
-        '&location=us-east5&thinking=false'
+        'claude-opus-4-6?project=lf-agent&location=us-east5&thinking=false'
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
     self.assertFalse(model.thinking)
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('thinking', args)
 
   def test_model_uri_vertexai_claude46_default(self):
@@ -334,8 +340,7 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_model_uri_instantiation_vertexai_claude47(self):
     """Test VertexAI model URI instantiation for Claude Opus 4.7."""
     model = lf.LanguageModel.get(
-        'claude-opus-4-7?project=lf-agent'
-        '&location=us-east5'
+        'claude-opus-4-7?project=lf-agent&location=us-east5'
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
     self.assertTrue(model._use_adaptive_thinking)
@@ -344,15 +349,12 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_model_uri_instantiation_vertexai_claude47_thinking(self):
     """Test VertexAI Claude 4.7 model URI with thinking=true."""
     model = lf.LanguageModel.get(
-        'claude-opus-4-7?project=lf-agent'
-        '&location=us-east5&thinking=true'
+        'claude-opus-4-7?project=lf-agent&location=us-east5&thinking=true'
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
     self.assertTrue(model.thinking)
     self.assertTrue(model._use_adaptive_thinking)
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(
         args['thinking'],
         {'type': 'adaptive', 'display': 'summarized'},
@@ -362,14 +364,11 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_model_uri_vertexai_claude47_thinking_false(self):
     """Test VertexAI Claude 4.7 with thinking=false."""
     model = lf.LanguageModel.get(
-        'claude-opus-4-7?project=lf-agent'
-        '&location=us-east5&thinking=false'
+        'claude-opus-4-7?project=lf-agent&location=us-east5&thinking=false'
     )
     self.assertIsInstance(model, vertexai.VertexAIAnthropic)
     self.assertFalse(model.thinking)
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('thinking', args)
     self.assertNotIn('output_config', args)
 
@@ -387,9 +386,7 @@ class VertexAIAnthropicTest(unittest.TestCase):
 
   def test_vertexai_claude47_opus_direct(self):
     """Test direct VertexAIClaude47Opus instantiation."""
-    model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5'
-    )
+    model = vertexai.VertexAIClaude47Opus(project='test', location='us-east5')
     self.assertTrue(model._use_adaptive_thinking)
     self.assertEqual(model.effort, 'high')
 
@@ -414,27 +411,23 @@ class VertexAIAnthropicTest(unittest.TestCase):
     model = vertexai.VertexAIClaude47Opus(
         project='test', location='us-east5', thinking=False
     )
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('thinking', args)
 
   def test_vertexai_claude47_opus_default(self):
     """Test VertexAIClaude47Opus default (no thinking, no budget)."""
-    model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5'
-    )
+    model = vertexai.VertexAIClaude47Opus(project='test', location='us-east5')
     args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('thinking', args)
 
   def test_vertexai_claude47_opus_default_strips_sampling_params(self):
     """Opus 4.7 strips temperature/top_k/top_p even without thinking."""
-    model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5'
+    model = vertexai.VertexAIClaude47Opus(project='test', location='us-east5')
+    args = model._request_args(
+        lf.LMSamplingOptions(
+            max_tokens=1024, temperature=0.7, top_k=40, top_p=0.9
+        )
     )
-    args = model._request_args(lf.LMSamplingOptions(
-        max_tokens=1024, temperature=0.7, top_k=40, top_p=0.9
-    ))
     self.assertNotIn('thinking', args)
     self.assertNotIn('temperature', args)
     self.assertNotIn('top_k', args)
@@ -443,34 +436,25 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_vertexai_claude47_opus_effort_xhigh(self):
     """Test VertexAIClaude47Opus with effort='xhigh'."""
     model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5',
-        thinking=True, effort='xhigh'
+        project='test', location='us-east5', thinking=True, effort='xhigh'
     )
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(args['output_config'], {'effort': 'xhigh'})
 
   def test_vertexai_claude47_opus_effort_max(self):
     """Test VertexAIClaude47Opus with effort='max'."""
     model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5',
-        thinking=True, effort='max'
+        project='test', location='us-east5', thinking=True, effort='max'
     )
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertEqual(args['output_config'], {'effort': 'max'})
 
   def test_vertexai_claude47_opus_effort_none(self):
     """Test VertexAIClaude47Opus with effort=None (no output_config)."""
     model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5',
-        thinking=True, effort=None
+        project='test', location='us-east5', thinking=True, effort=None
     )
-    args = model._request_args(
-        lf.LMSamplingOptions(max_tokens=1024)
-    )
+    args = model._request_args(lf.LMSamplingOptions(max_tokens=1024))
     self.assertNotIn('output_config', args)
 
   @mock.patch.object(vertexai.VertexAI, 'credentials', new=True)
@@ -499,13 +483,27 @@ class VertexAIAnthropicTest(unittest.TestCase):
   def test_vertexai_claude47_opus_reasoning_effort_override(self):
     """reasoning_effort in sampling options overrides model-level effort."""
     model = vertexai.VertexAIClaude47Opus(
-        project='test', location='us-east5',
-        thinking=True, effort='high'
+        project='test', location='us-east5', thinking=True, effort='high'
     )
-    args = model._request_args(lf.LMSamplingOptions(
-        max_tokens=1024, reasoning_effort='low'
-    ))
+    args = model._request_args(
+        lf.LMSamplingOptions(max_tokens=1024, reasoning_effort='low')
+    )
     self.assertEqual(args['output_config'], {'effort': 'low'})
+
+  def test_vertexai_anthropic_request_passes_through_caching(self):
+    model = vertexai.VertexAIClaude3Opus_20240229(project='langfun')
+    prompt = lf.UserMessage('hello', system_message=lf.SystemMessage('sys'))
+    req = model.request(prompt, lf.LMSamplingOptions())  # NO extras
+    # Verify cache lands by default
+    self.assertIsInstance(req['system'], list)
+    self.assertEqual(req['system'][0]['cache_control'], {'type': 'ephemeral'})
+    self.assertEqual(
+        req['messages'][-1]['content'][-1]['cache_control'],
+        {'type': 'ephemeral'},
+    )
+    # Verify vertexai fields
+    self.assertEqual(req['anthropic_version'], 'vertex-2023-10-16')
+    self.assertNotIn('model', req)
 
 
 if __name__ == '__main__':
