@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import time
 import unittest
 
 from langfun.env import test_utils
@@ -216,6 +217,8 @@ class NonSandboxBasedFeatureTests(unittest.TestCase):
     )
     with env:
       env.wait_for_housekeeping()
+      while env.is_online:
+        time.sleep(0.01)
       self.assertFalse(env.is_online)
     self.assertIn(
         '[testing-env/test_feature] feature housekeeping 0 with ValueError',
