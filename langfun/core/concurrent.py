@@ -190,6 +190,7 @@ def concurrent_execute(
     exponential_backoff: bool = True,
     max_retry_interval: int = 300,
     return_jobs: bool = False,
+    wait_timeout_threads_on_shutdown: bool = False,
 ) -> list[Any]:
   """Executes a function concurrently under current component context.
 
@@ -233,6 +234,10 @@ def concurrent_execute(
       exponentially.
     return_jobs: If True, return a list of `Job` objects. Otherwise, return a
       list of outputs.
+    wait_timeout_threads_on_shutdown: If True, wait for workers to finish during
+      shutdown in the finally block. This prevents orphan-thread accumulation
+      when workers are blocked in non-cooperative work that does not respond to
+      cancellation.
 
   Returns:
     A list of ouputs. Each is the return value of `func` based on the input
@@ -280,8 +285,9 @@ def concurrent_execute(
     )
   finally:
     if shutdown_after_finish:
-      # Do not wait threads to finish if they are timed out.
-      executor.shutdown(wait=False, cancel_futures=True)
+      executor.shutdown(
+          wait=wait_timeout_threads_on_shutdown, cancel_futures=True
+      )
 
 
 @dataclasses.dataclass
@@ -678,6 +684,7 @@ def concurrent_map(
     retry_interval: int | tuple[int, int] = (5, 60),
     exponential_backoff: bool = True,
     return_jobs: bool = False,
+    wait_timeout_threads_on_shutdown: bool = False,
 ) -> Iterator[Any]:
   """Maps inputs to outptus via func concurrently under current context.
 
@@ -754,6 +761,10 @@ def concurrent_map(
     exponential_backoff: If True, exponential wait time will be applied on top
       of the base retry interval.
     return_jobs: If True, the returned iterator will emit `Job` objects.
+    wait_timeout_threads_on_shutdown: If True, wait for workers to finish during
+      shutdown in the finally block. This prevents orphan-thread accumulation
+      when workers are blocked in non-cooperative work that does not respond to
+      cancellation.
 
   Yields:
     An iterator of (input, output, error) or Job object.
@@ -894,8 +905,9 @@ def concurrent_map(
       ProgressBar.uninstall(bar_id)
 
     if shutdown_after_finish:
-      # Do not wait threads to finish if they are timed out.
-      executor.shutdown(wait=False, cancel_futures=True)
+      executor.shutdown(
+          wait=wait_timeout_threads_on_shutdown, cancel_futures=True
+      )
 
 
 class ExecutorPool:
