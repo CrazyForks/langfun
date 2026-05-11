@@ -1013,9 +1013,9 @@ class Gemini(rest.REST):
       messages.append(message)
 
     usage = json['usageMetadata']
-    input_tokens = usage['promptTokenCount']
     # NOTE(daiyip): We saw cases that `candidatesTokenCount` is not present.
     # Therefore, we use 0 as the default value.
+    input_tokens = usage.get('promptTokenCount', 0)
     output_tokens = usage.get('candidatesTokenCount', 0)
     thinking_tokens = usage.get('thoughtsTokenCount', 0)
     total_tokens = usage.get('totalTokenCount', 0)

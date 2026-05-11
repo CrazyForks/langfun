@@ -375,6 +375,27 @@ class GeminiTest(unittest.TestCase):
       self.assertEqual(m.metadata.finish_reason, 'MAX_TOKENS')
       self.assertEqual(m.text, 'This is')
 
+  def test_result_with_missing_prompt_token_count(self):
+    """Tests that missing promptTokenCount defaults to 0."""
+    model = gemini.Gemini('gemini-1.5-pro', api_endpoint='')
+    json_response = {
+        'candidates': [
+            {
+                'content': {
+                    'parts': [{'text': 'response'}],
+                },
+            },
+        ],
+        'usageMetadata': {
+            'candidatesTokenCount': 4,
+            'totalTokenCount': 4,
+        },
+    }
+    result = model.result(json_response)
+    self.assertEqual(result.usage.prompt_tokens, 0)
+    self.assertEqual(result.usage.completion_tokens, 4)
+    self.assertEqual(result.usage.total_tokens, 4)
+
   def test_call_model_with_system_message(self):
     with mock.patch('requests.Session.post') as mock_generate:
       mock_generate.side_effect = mock_requests_post
