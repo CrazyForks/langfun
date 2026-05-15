@@ -616,6 +616,275 @@ class ConcurrentMapTest(unittest.TestCase):
     concurrent.ProgressBar.refresh()
     self.assertIn('100%', string_io.getvalue())
 
+  def test_concurrent_map_max_duration_ordered(self):
+    """max_duration bounds total wall-clock time for ordered concurrent_map."""
+
+    def slow(x):
+      time.sleep(x)
+      return x
+
+    t0 = time.time()
+    results = list(
+        concurrent.concurrent_map(
+            slow,
+            [1, 1, 10, 10],
+            ordered=True,
+            max_duration=3.0,
+            max_workers=2,
+        )
+    )
+    elapsed = time.time() - t0
+    # Should complete in ~3s, not 10+.
+    self.assertLess(elapsed, 6.0)
+    # First two (1s each) should succeed, last two canceled.
+    succeeded = [r for _, r, e in results if e is None]
+    canceled = [e for _, _, e in results if isinstance(e, TimeoutError)]
+    self.assertEqual(len(succeeded), 2)
+    self.assertEqual(len(canceled), 2)
+
+  def test_concurrent_map_max_duration_unordered(self):
+    """max_duration bounds total wall-clock time for unordered concurrent_map."""
+
+    def slow(x):
+      time.sleep(x)
+      return x
+
+    t0 = time.time()
+    results = list(
+        concurrent.concurrent_map(
+            slow,
+            [1, 10, 1, 10],
+            max_duration=3.0,
+            max_workers=4,
+        )
+    )
+    elapsed = time.time() - t0
+    self.assertLess(elapsed, 6.0)
+    succeeded = [r for _, r, e in results if e is None]
+    canceled = [e for _, _, e in results if isinstance(e, TimeoutError)]
+    self.assertGreaterEqual(len(succeeded), 2)
+    self.assertGreaterEqual(len(canceled), 2)
+
+  def test_concurrent_map_max_duration_none_default(self):
+    """max_duration=None preserves backward-compatible behavior."""
+
+    def fast(x):
+      return x * 2
+
+    results = list(
+        concurrent.concurrent_map(
+            fast,
+            [1, 2, 3],
+            max_duration=None,
+        )
+    )
+    self.assertEqual(
+        set(results),
+        {(1, 2, None), (2, 4, None), (3, 6, None)},
+    )
+
+  def test_concurrent_map_max_duration_raises_when_not_silenced(self):
+    """max_duration raises TimeoutError when silence_on_errors=None."""
+
+    def slow(x):
+      time.sleep(x)
+      return x
+
+    with self.assertRaises(TimeoutError):
+      list(
+          concurrent.concurrent_map(
+              slow,
+              [10],
+              max_duration=1.0,
+              silence_on_errors=None,
+              max_workers=1,
+          )
+      )
+
+  def test_concurrent_map_max_duration_unordered_race_requeues_completed(self):
+    """Race: future done between as_completed() and done() check is re-queued.
+
+    Regression test for daiyip's review (concurrent.py:935-938).
+    Without the fix, mark_canceled would overwrite a valid result with
+    TimeoutError — the job would have BOTH result and error set, corrupting
+    the output. The fix gates mark_canceled behind `not future.done()` and
+    re-queues completed futures for normal processing.
+
+    This test mocks as_completed to deterministically force the race:
+    on the first poll, as_completed yields nothing (so the fast future
+    is NOT in completed_batch), but future.done() returns True because
+    the task already completed. The deadline check then hits the else
+    branch, re-queueing the future. On the next poll, as_completed
+    correctly yields it with its valid result.
+    """
+    gate = threading.Event()
+
+    def task(x):
+      if x == 'fast':
+        return 'result_ok'
+      gate.wait(timeout=30)
+      return 'never'
+
+    call_count = [0]
+    original_as_completed = futures.as_completed
+
+    def rigged_as_completed(fs, timeout=None):
+      call_count[0] += 1
+      if call_count[0] == 1:
+        # First poll: yield nothing. The 'fast' future IS done but won't
+        # be in completed_batch, forcing the remaining_futures loop to
+        # encounter a done future during deadline processing.
+        time.sleep(0.05)
+        return iter([])
+      return original_as_completed(fs, timeout=timeout)
+
+    try:
+      with mock.patch.object(
+          futures, 'as_completed', rigged_as_completed
+      ):
+        results = list(
+            concurrent.concurrent_map(
+                task,
+                ['fast', 'slow'],
+                max_duration=0.001,
+                max_workers=2,
+            )
+        )
+    finally:
+      gate.set()
+
+    results_dict = {inp: (r, e) for inp, r, e in results}
+
+    # 'fast' completed — result MUST be preserved, not overwritten.
+    r, e = results_dict['fast']
+    self.assertIsNone(
+        e,
+        f'Race condition bug: completed result overwritten with {e}',
+    )
+    self.assertEqual(r, 'result_ok')
+
+    # 'slow' canceled with TimeoutError.
+    _, e = results_dict['slow']
+    self.assertIsInstance(e, TimeoutError)
+
+  def test_concurrent_map_max_duration_no_result_corruption_invariant(self):
+    """Adversarial stress test: no result is ever corrupted at boundaries.
+
+    Runs tasks that complete at various times near the deadline.
+    The invariant: if error is None, the result must be the correct
+    computed value. If error is set, it must be TimeoutError.
+    """
+
+    def boundary_task(x):
+      time.sleep(x * 0.05)
+      return x * 100
+
+    for trial in range(3):
+      results = list(
+          concurrent.concurrent_map(
+              boundary_task,
+              list(range(1, 11)),
+              max_duration=0.25,
+              max_workers=10,
+          )
+      )
+      for inp, result, error in results:
+        if error is None:
+          self.assertEqual(
+              result,
+              inp * 100,
+              f'Trial {trial}: input={inp} expected {inp * 100}, '
+              f'got {result}',
+          )
+        else:
+          self.assertIsInstance(error, TimeoutError)
+
+  def test_concurrent_map_max_duration_near_zero_cancels_all(self):
+    """Near-zero max_duration cancels all items immediately."""
+
+    def task(x):
+      time.sleep(1)
+      return x
+
+    results = list(
+        concurrent.concurrent_map(
+            task,
+            [1, 2, 3],
+            max_duration=0.001,
+            max_workers=3,
+        )
+    )
+    errors = [e for _, _, e in results if e is not None]
+    self.assertGreater(len(errors), 0)
+    for e in errors:
+      self.assertIsInstance(e, TimeoutError)
+      self.assertIn('max_duration', str(e))
+
+  def test_concurrent_map_max_duration_with_per_item_timeout(self):
+    """max_duration and timeout interact correctly.
+
+    Per-item timeout fires for individual slow items; max_duration acts
+    as a wall-clock ceiling independent of per-item timing.
+    """
+
+    def task(x):
+      time.sleep(x)
+      return x
+
+    results = list(
+        concurrent.concurrent_map(
+            task,
+            [1, 5, 1, 5],
+            timeout=3,
+            max_duration=10.0,
+            max_workers=4,
+        )
+    )
+    succeeded = [(i, r) for i, r, e in results if e is None]
+    timed_out = [(i, e) for i, _, e in results if e is not None]
+    self.assertGreater(len(succeeded), 0, 'Fast items should succeed')
+    self.assertGreater(len(timed_out), 0, 'Slow items should timeout')
+    for _, e in timed_out:
+      self.assertIsInstance(e, TimeoutError)
+
+  def test_concurrent_map_max_duration_all_complete_before_deadline(self):
+    """When all items finish before deadline, no errors occur."""
+
+    def fast(x):
+      return x ** 2
+
+    results = list(
+        concurrent.concurrent_map(
+            fast,
+            [1, 2, 3, 4, 5],
+            max_duration=60.0,
+            max_workers=5,
+        )
+    )
+    self.assertEqual(len(results), 5)
+    for _, _, error in results:
+      self.assertIsNone(error)
+
+  def test_concurrent_map_max_duration_ordered_error_message_format(self):
+    """Ordered path: error message includes the max_duration value."""
+
+    def slow(x):
+      time.sleep(10)
+      return x
+
+    results = list(
+        concurrent.concurrent_map(
+            slow,
+            [1],
+            max_duration=1.0,
+            ordered=True,
+            max_workers=1,
+        )
+    )
+    _, _, error = results[0]
+    self.assertIsInstance(error, TimeoutError)
+    self.assertIn('max_duration=1.0', str(error))
+
 
 class ExecutorPoolTest(unittest.TestCase):
 

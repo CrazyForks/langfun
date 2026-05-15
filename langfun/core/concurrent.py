@@ -672,6 +672,7 @@ def concurrent_map(
     ] = None,
     status_fn: Callable[[Progress], dict[str, Any]] | None = None,
     timeout: int | None = None,
+    max_duration: float | None = None,
     silence_on_errors: Union[
         Type[BaseException], Tuple[Type[BaseException], ...], None
     ] = Exception,
@@ -748,6 +749,10 @@ def concurrent_map(
     timeout: The timeout in seconds for processing each input. It is the total
       processing time for each input, even multiple retries take place. If None,
       there is no timeout.
+    max_duration: The maximum total wall-clock time in seconds for the entire
+      concurrent_map operation. When exceeded, all remaining unfinished futures
+      are canceled with TimeoutError. If None, there is no overall deadline.
+      This is distinct from ``timeout`` which applies per-item.
     silence_on_errors: If None, any errors raised during processing any inputs
       will be raised. Otherwise, the matched errors will not raise, instead,
       they will be returned as the third_element of the tuple.
@@ -827,20 +832,32 @@ def concurrent_map(
         status['TimeIt'] = progress.timeit_summary_str()
       ProgressBar.update(bar_id, delta=1, status=status)
 
+  deadline = time.time() + max_duration if max_duration else None
+
   try:
     if ordered:
       for future in pending_futures:
         job = future_to_job[future]
         completed = False
         while True:
+          poll_timeout = 1
+          if deadline:
+            poll_timeout = max(0, min(1, deadline - time.time()))
           try:
-            _ = future.result(timeout=1)
+            _ = future.result(timeout=poll_timeout)
             completed = True
           except concurrent.futures.TimeoutError:
             if timeout and timeout < job.elapse:
               future.cancel()
               last_error = TimeoutError(
                   f'Execution time ({job.elapse}) exceeds {timeout} seconds.')
+              job.mark_canceled(last_error)
+              completed = True
+            elif deadline and time.time() > deadline:
+              future.cancel()
+              last_error = TimeoutError(
+                  f'Total execution time exceeds max_duration={max_duration}s.'
+              )
               job.mark_canceled(last_error)
               completed = True
 
@@ -862,9 +879,12 @@ def concurrent_map(
     else:
       while pending_futures:
         completed_batch = set()
+        poll_timeout = 1
+        if deadline:
+          poll_timeout = max(0, min(1, deadline - time.time()))
         try:
           for future in concurrent.futures.as_completed(
-              pending_futures, timeout=1):
+              pending_futures, timeout=poll_timeout):
             job = future_to_job[future]
             del future_to_job[future]
             if job.error is not None and not (
@@ -896,6 +916,27 @@ def concurrent_map(
             yield job.args[0], job.result, job.error
             progress.update(job)
             update_progress_bar(progress)
+          elif deadline and time.time() > deadline:
+            if not future.done():
+              future.cancel()
+              job.mark_canceled(
+                  TimeoutError(
+                      'Total execution time exceeds '
+                      f'max_duration={max_duration}s.'
+                  )
+              )
+              if not (
+                  silence_on_errors
+                  and isinstance(job.error, silence_on_errors)
+              ):
+                raise job.error  # pylint: disable=g-doc-exception
+              yield job.args[0], job.result, job.error
+              progress.update(job)
+              update_progress_bar(progress)
+            else:
+              # Future completed between wait() and here; re-queue for
+              # normal processing on the next iteration.
+              remaining_futures.append(future)
           else:
             remaining_futures.append(future)
         pending_futures = remaining_futures

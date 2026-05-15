@@ -2176,13 +2176,30 @@ class Session(pg.Object, pg.views.html.HtmlTreeView.Extension):
       phase: str | None = None,
       max_workers: int = 32,
       timeout: int | None = None,
+      max_duration: float | None = None,
       silence_on_errors: Union[
           Type[BaseException], tuple[Type[BaseException], ...], None
       ] = Exception,
       ordered: bool = False,
       show_progress: bool | int = False,
   ) -> Iterator[Any]:
-    """Starts and tracks parallel execution with `lf.concurrent_map`."""
+    """Starts and tracks parallel execution with `lf.concurrent_map`.
+
+    Args:
+      func: Function to apply to each input.
+      parallel_inputs: Inputs to process in parallel.
+      phase: Optional phase name for execution tracking.
+      max_workers: Maximum number of concurrent workers.
+      timeout: Per-item timeout in seconds.
+      max_duration: Total wall-clock deadline in seconds for the entire
+        operation. When exceeded, remaining futures are canceled.
+      silence_on_errors: Error types to silence instead of raising.
+      ordered: If True, yield results in input order.
+      show_progress: Whether to show a progress bar.
+
+    Yields:
+      Tuples of (input, result, error) for each input.
+    """
     self.check_execution_time()
     parallel_inputs = list(parallel_inputs)
     parallel_execution = ParallelExecutions(name=phase)
@@ -2208,6 +2225,7 @@ class Session(pg.Object, pg.views.html.HtmlTreeView.Extension):
         parallel_inputs,
         max_workers=max_workers,
         timeout=self._child_max_execution_time(timeout),
+        max_duration=max_duration,
         silence_on_errors=silence_on_errors,
         ordered=ordered,
         show_progress=show_progress,
